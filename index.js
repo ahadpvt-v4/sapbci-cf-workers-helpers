@@ -1,7 +1,7 @@
 import { fingerprint } from './cloudflare-compatible-fingerprint';
 import { RouteDispatcher } from './cloudflare-workers-compatible-route-dispatcher';
 import { randomIntVal, randomStringVal, generateAesKeyBase64 } from './random-stuff';
-import { encryptResponse, decryptRequest } from './cloudflare-compatible-encryption-utils';
+import { encryptWithKey, decryptWithKey } from './cloudflare-compatible-encryption-utils';
 import { Cors } from './cloudflare-workers-compatible-cors-handler';
 const dataTransferEncyptionLocationKeysPrefix = 'iwill_dataTransferEncryptionKeys_for_';
 const userLoginDataLocationPrefix = 'iwill_userLoginData_for_';
@@ -79,7 +79,7 @@ async function handleReset(req, res, env, ctx) {
 				}
 				const username = newUsername ? newUsername : existingUserJSON.username;
 				const password = newPassword ? newPassword : existingUserJSON.password;
-				if (!username || username.length < 3 || username.length > 32) {
+				if (!username || username.length < 3 || username.length > 64) {
 					return res.enableCORS().setStatus(400).sendJSON({ success: false, error: 'Invalid Username length', code: 'INVALID_USER_DATA' });
 				}
 				if (password && password.length < 8) {
@@ -106,7 +106,7 @@ async function handleReset(req, res, env, ctx) {
 
 				const { responseEncryptionKey } = await getDataTransferEncryptionKeys(uniqueEncId, env);
 
-				const encryptedResponse = await encryptResponse(
+				const encryptedResponse = await encryptWithKey(
 					JSON.stringify({ success: true, username, publicKey: publicKeyFromUser, updatedAt: dateNow }),
 					responseEncryptionKey
 				);
@@ -151,7 +151,7 @@ async function handleMasterRevoke(req, res, env, ctx) {
 
 		const { responseEncryptionKey } = await getDataTransferEncryptionKeys(uniqueEncId, env);
 
-		const encryptedResponse = await encryptResponse(
+		const encryptedResponse = await encryptWithKey(
 			JSON.stringify({ success: true, masterKeyId, masterKeySecret, publicKey, masterKeyCreatedAt, masterKeyExpiryAt }),
 			responseEncryptionKey
 		);
@@ -231,11 +231,11 @@ async function handleClientLogin(req, res, env, ctx) {
 			return res.enableCORS().setStatus(400).sendJSON({ success: extractSuccess, error: extractError, code: extractCode });
 		}
 
-		if (!username || username.length < 3 || username.length > 32) {
+		if (!username || username.length < 3 || username.length > 64) {
 			return res.enableCORS().setStatus(400).sendJSON({ success: false, error: 'Invalid or empty username', code: 'INVALID_USER_DATA' });
 		}
 
-		if (!password || password.length < 8 || username.length > 16) {
+		if (!password || password.length < 8 || password.length > 16) {
 			return res.enableCORS().setStatus(400).sendJSON({ success: false, error: 'Invalid password length', code: 'INVALID_USER_DATA' });
 		}
 
@@ -272,7 +272,7 @@ async function handleClientLogin(req, res, env, ctx) {
 
 			const { responseEncryptionKey } = await getDataTransferEncryptionKeys(uniqueEncId, env);
 
-			const encryptedResponse = await encryptResponse(
+			const encryptedResponse = await encryptWithKey(
 				JSON.stringify({ success: true, masterKeyId, masterKeySecret, publicKey, masterKeyCreatedAt, masterKeyExpiryAt }),
 				responseEncryptionKey
 			);
@@ -307,11 +307,11 @@ async function handleClientRegister(req, res, env, ctx) {
 			return res.enableCORS().setStatus(400).sendJSON({ success: extractSuccess, error: extractError, code: extractCode });
 		}
 
-		if (!username || username.length < 3 || username.length > 32) {
+		if (!username || username.length < 3 || username.length > 64) {
 			return res.enableCORS().setStatus(400).sendJSON({ success: false, error: 'Invalid or empty username', code: 'INVALID_USER_DATA' });
 		}
 
-		if (!password || password.length < 8 || username.length > 16) {
+		if (!password || password.length < 8 || password.length > 16) {
 			res.enableCORS().setStatus(400).sendJSON({ success: false, error: 'Invalid password length', code: 'INVALID_USER_DATA' });
 		}
 
@@ -338,7 +338,7 @@ async function handleClientRegister(req, res, env, ctx) {
 
 		const { responseEncryptionKey } = await getDataTransferEncryptionKeys(uniqueEncId, env);
 
-		const encryptedResponse = await encryptResponse(
+		const encryptedResponse = await encryptWithKey(
 			JSON.stringify({ success: true, username, publicKey, privatekey, createdAt: dateNow }),
 			responseEncryptionKey
 		);
@@ -382,7 +382,7 @@ async function toDecryptedRequestData(req, res, env) {
 	}
 
 	try {
-		decryptedRequestData = await decryptRequest(encryptedRequestData, requestEncryptionKey);
+		decryptedRequestData = await decryptWithKey(encryptedRequestData, requestEncryptionKey);
 	} catch (error) {
 		return { success: false, error, code: 'REQUEST_DECRYPTION_FAILED' };
 	}

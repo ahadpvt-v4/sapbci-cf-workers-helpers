@@ -1,4 +1,4 @@
-async function encryptResponse(plaintext, base64Key) {
+async function encryptWithKey(plaintext, base64Key) {
 	// Convert key
 	const keyBytes = Uint8Array.from(atob(base64Key), (c) => c.charCodeAt(0));
 	const cryptoKey = await crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['encrypt']);
@@ -19,7 +19,7 @@ async function encryptResponse(plaintext, base64Key) {
 	result.set(new Uint8Array(ciphertext), iv.byteLength);
 	return result;
 }
-async function decryptRequest(encryptedData, base64Key) {
+async function decryptWithKey(encryptedData, base64Key) {
 	// Convert key
 	const keyBytes = Uint8Array.from(atob(base64Key), (c) => c.charCodeAt(0));
 	const cryptoKey = await crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['decrypt']);
@@ -35,6 +35,6 @@ async function decryptRequest(encryptedData, base64Key) {
 	return new Uint8Array(plaintextBuffer);
 }
 
-module.exports = { encryptResponse, decryptRequest };
+module.exports = { encryptWithKey, decryptWithKey };
 
 // cloudflare-compatible-encryption-utils.js

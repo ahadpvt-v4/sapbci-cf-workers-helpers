@@ -77,7 +77,15 @@ class ResponseBuilder {
 	get streamReady() {
 		return this._usingStream && this.controller !== null;
 	}
-
+	/**
+	 * Sets the HTTP status code
+	 * @param {number} statusCode - HTTP status code to set
+	 * @returns {this}
+	 */
+	status(statusCode) {
+		this.status = statusCode;
+		return this;
+	}
 	/**
 	 * Sends a response with automatic content type detection
 	 * @param {string|Object} [data='OK'] - Response data
@@ -181,6 +189,7 @@ class ResponseBuilder {
 	 * @returns {Response}
 	 */
 	sendText(text) {
+		console.log('text :-', text);
 		this.setHeader('Content-Type', 'text/plain; charset=utf-8');
 		return this.end(text);
 	}
@@ -256,10 +265,7 @@ class ResponseBuilder {
 	 */
 	stream(body, contentType = 'application/octet-stream') {
 		this.headers.set('Content-Type', contentType);
-		return new Response(body, {
-			status: this.status,
-			headers: this.headers,
-		});
+		return this.end(body);
 	}
 
 	/**
@@ -410,25 +416,32 @@ class ResponseBuilder {
 				headers: this.headers,
 			});
 		}
-
-		if (typeof Blob !== 'undefined' && body instanceof Blob) {
-			this.rawResponse = new Response(body, { status: this.status, headers: this.headers });
+		let output = '';
+		const useData = body !== null ? body : this.data;
+		if (typeof Blob !== 'undefined' && useData instanceof Blob) {
+			this.rawResponse = new Response(useData, { status: this.status, headers: this.headers });
 			return this.rawResponse;
 		}
-		if (typeof FormData !== 'undefined' && body instanceof FormData) {
-			this.rawResponse = new Response(body, { status: this.status, headers: this.headers });
+		if (typeof FormData !== 'undefined' && useData instanceof FormData) {
+			this.rawResponse = new Response(useData, { status: this.status, headers: this.headers });
 			return this.rawResponse;
 		}
-		if (body instanceof ArrayBuffer) {
-			this.rawResponse = new Response(new Uint8Array(body), {
+		if (useData instanceof ArrayBuffer) {
+			this.headers.set('Content-Type', 'application/octet-stream');
+			this.rawResponse = new Response(new Uint8Array(useData), {
 				status: this.status,
 				headers: this.headers,
 			});
 			return this.rawResponse;
 		}
-
-		let output = '';
-		const useData = body !== null ? body : this.data;
+		if (useData instanceof Uint8Array) {
+			this.headers.set('Content-Type', 'application/octet-stream');
+			this.rawResponse = new Response(useData, {
+				status: this.status,
+				headers: this.headers,
+			});
+			return this.rawResponse;
+		}
 		if (typeof useData === 'object') {
 			output = JSON.stringify(useData);
 			if (!this.headers.has('Content-Type')) {

@@ -42,6 +42,8 @@ class Cors {
 
 		/** @private @type {Set<string>} */
 		this.customMethods = new Set();
+		// If origin is a function, store it:
+		this.originFn = typeof this.defaults.origin === 'function' ? this.defaults.origin : null;
 	}
 
 	/**
@@ -103,12 +105,11 @@ class Cors {
 					hint: 'Ensure your middleware pipeline provides a valid ResponseBuilder-like object.',
 				});
 			}
-
 			if (req.request.method === 'OPTIONS') {
 				res
-					.setHeader('Access-Control-Allow-Origin', origin)
+					.setHeader('Access-Control-Allow-Origin', '*')
 					.setHeader('Access-Control-Allow-Methods', methods)
-					.setHeader('Access-Control-Allow-Headers', headers)
+					.setHeader('Access-Control-Allow-Headers', Array.isArray(headers) ? headers.join(',') : String(headers))
 					.setHeader('Access-Control-Max-Age', String(maxAge));
 
 				if (credentials) {
@@ -117,10 +118,19 @@ class Cors {
 				return res.setStatus(204).end();
 			}
 
+			const originHeader = req.headers.origin;
+
+			let allowOrigin = '*';
+			if (this.originFn) {
+				allowOrigin = this.originFn(originHeader) ? originHeader : 'null';
+			} else {
+				allowOrigin = this.defaults.origin;
+			}
+
 			res
-				.setHeader('Access-Control-Allow-Origin', origin)
+				.setHeader('Access-Control-Allow-Origin', allowOrigin)
 				.setHeader('Access-Control-Allow-Methods', methods)
-				.setHeader('Access-Control-Allow-Headers', headers);
+				.setHeader('Access-Control-Allow-Headers', Array.isArray(headers) ? headers.join(',') : String(headers));
 
 			if (credentials) {
 				res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -132,4 +142,5 @@ class Cors {
 }
 
 module.exports = { Cors };
+
 //cloudflare-workers-compatible-cors-handler.js

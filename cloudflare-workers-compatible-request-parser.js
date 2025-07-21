@@ -21,13 +21,23 @@ function createError({ message, status = 400, code = 'BAD_REQUEST', exit_code = 
  * A helper class to parse Fetch API Request objects into
  * usable forms: text, JSON, form data, query parameters, etc.
  */
+/**
+ * A utility class for parsing and handling Fetch API Request objects in a Cloudflare Workers-compatible environment.
+ * Provides convenient accessors and methods for headers, query parameters, route segments, body parsing, and more.
+ *
+ * @class
+ * @example
+ * const parser = new RequestParser(request, routeMatcher);
+ * const params = parser.params;
+ * const body = await parser.json();
+ */
 class RequestParser {
 	/**
 	 * @param {Request} request - A Fetch API Request instance.
 	 * @throws {TypeError} If the provided argument is not a Request.
 	 */
-	constructor(request) {
-		if (!(request instanceof Request)) {
+	constructor(originalRequest, routeMatcher = null) {
+		if (!(originalRequest instanceof Request)) {
 			throw createError({
 				message: 'RequestParser expects a Fetch API Request object.',
 				code: 'INVALID_REQUEST_INSTANCE',
@@ -36,42 +46,131 @@ class RequestParser {
 			});
 		}
 		/** @private */
-		this._request = request;
+		this._request = originalRequest;
+		/** @private */
+		this._originalHeaders = new Headers(originalRequest.headers);
+		/** @private */
+		this._rawHeaders = this._originalHeaders.entries();
+		/** @private */
+		this._headers = Object.fromEntries(this._rawHeaders.map(([key, value]) => [key.toLowerCase(), value]));
+
+		/** @private */
+		this._rawBody = this._request.body;
 		/** @private */
 		this._parsedBody = undefined;
 		/** @private */
 		this._bodyUsed = false;
 		/** @private */
 		this._textEncoder = new TextEncoder();
+		/**
+		 * Accessing the request URL.
+		 */
+		this.url = this._request.url;
+		/**
+		 * Accessing the request URL Object.
+		 */
+		this.urlObject = new URL(this._request.url);
+		/**
+		 * Parsed query parameters from the URL.
+		 * This is an object where keys are parameter names and values are their values.
+		 * @type {Object.<string,string>}
+		 */
+		this.queryParams = Object.fromEntries(this.urlObject.searchParams.entries());
+		/**
+		 * 	Alias for queryParams for compatibility with older code
+		 * Parsed query parameters from the URL.
+		 * This is an object where keys are parameter names and values are their values.
+		 * @type {Object.<string,string>}
+		 */
+
+		this.parsedQuery = this.queryParams;
+		/** @private */
+		this._routeMatcher = routeMatcher;
 	}
 
 	/**
+	 * Returns the segments of the route matcher.
+	 * @returns {Array<string>}
+	 * @throws {Error} If the route matcher is not defined.
+	 */
+	get segments() {
+		if (!this._routeMatcher) {
+			throw createError({
+				message: 'Route matcher is not defined.',
+				code: 'ROUTE_MATCHER_NOT_DEFINED',
+				exit_code: 109,
+				hint: 'Ensure you provide a route matcher when creating RequestParser.',
+			});
+		}
+		return this._routeMatcher.segments;
+	}
+	/**
+	 * Returns the route parameters extracted from the URL.
+	 * @returns {Object.<string,string>}
+	 */
+	get params() {
+		if (!this._routeMatcher) {
+			throw createError({
+				message: 'Route matcher is not defined.',
+				code: 'ROUTE_MATCHER_NOT_DEFINED',
+				exit_code: 109,
+				hint: 'Ensure you provide a route matcher when creating RequestParser.',
+			});
+		}
+		return this._routeMatcher.params;
+	}
+	/**
+	 * Returns the wildcard segments extracted from the URL.
+	 * @returns {Array<string>}
+	 */
+	get wildcards() {
+		if (!this._routeMatcher) {
+			throw createError({
+				message: 'Route matcher is not defined.',
+				code: 'ROUTE_MATCHER_NOT_DEFINED',
+				exit_code: 109,
+				hint: 'Ensure you provide a route matcher when creating RequestParser.',
+			});
+		}
+		return this._routeMatcher.wildcards;
+	}
+	/**
+	 * Returns the headers of the request.
+	 * @returns {Headers}
+	 */
+	get headers() {
+		return this._headers;
+	}
+	/**
 	 * Returns the raw Fetch API Request object.
+	 * @returns {Request}
+	 */
+	get rawRequest() {
+		return this._request;
+	}
+	/**
+	 * Returns the original request object.
+	 * This is an alias for rawRequest.
 	 * @returns {Request}
 	 */
 	get request() {
 		return this._request;
 	}
-
 	/**
-	 * Returns the URL object of the request.
-	 * @returns {URL}
-	 * @throws {Error} If the URL cannot be parsed.
+	 * Alias for rawRequest.
+	 * @returns {Request}
+	 * @deprecated Use rawRequest instead.
+	 * @throws {Error} If the request is not a valid Fetch API Request.
 	 */
-	get url() {
-		try {
-			return new URL(this._request.url);
-		} catch (e) {
-			throw createError({
-				message: 'Failed to parse request URL.',
-				code: 'INVALID_URL',
-				status: 400,
-				exit_code: 101,
-				hint: 'Ensure the request.url is a valid absolute URL.',
-			});
-		}
+	get originalRequest() {
+		return this._request;
 	}
-
+	/**
+	 *
+	 */
+	get pathname() {
+		return this.urlObject.pathname;
+	}
 	/**
 	 * Returns the HTTP method in lowercase.
 	 * @returns {string}
@@ -84,10 +183,27 @@ class RequestParser {
 	 * Returns the headers of the request.
 	 * @returns {Headers}
 	 */
-	get headers() {
-		return this._request.headers;
+	get originalHeaders() {
+		return this._originalHeaders;
 	}
-
+	/**
+	 * Return rawHeaders of the orignal request
+	 * @returns {Array<Array>}
+	 */
+	get rawHeaders() {
+		return this._rawHeaders;
+	}
+	/**
+	 * Return hash of url
+	 * @returns {Number}
+	 */
+	get hash() {
+		const hash = this.urlObject.hash.slice(1) || null;
+		return hash;
+	}
+	get queryString() {
+		return this.query();
+	}
 	/**
 	 * Parses query string parameters into an object.
 	 * @returns {Object.<string,string>}
@@ -196,7 +312,11 @@ class RequestParser {
 		if (this._bodyUsed) return this._parsedBody;
 		try {
 			const form = await this._request.formData();
-			const obj = Object.fromEntries(form.entries());
+			const obj = {};
+			for (const key of form.keys()) {
+				const all = form.getAll(key);
+				obj[key] = all.length > 1 ? all : all[0];
+			}
 			this._parsedBody = obj;
 			this._bodyUsed = true;
 			return obj;
@@ -243,6 +363,52 @@ class RequestParser {
 				hint: 'Check if the body matches the declared content-type.',
 			});
 		}
+	}
+	/**
+	 * Returns the raw ReadableStream of the body.
+	 * Note: This stream can only be consumed once.
+	 * @returns {ReadableStream}
+	 */
+	stream() {
+		if (this._bodyUsed) {
+			throw createError({
+				message: 'The body has already been consumed.',
+				code: 'BODY_ALREADY_USED',
+				status: 400,
+				exit_code: 110,
+				hint: 'Streams can only be read once. Use .tee() to split.',
+			});
+		}
+		this._bodyUsed = true;
+		return this._request.body;
+	}
+	/**
+	 * Returns two cloned ReadableStreams of the body.
+	 * This allows you to read the body twice independently.
+	 * @returns {[ReadableStream, ReadableStream]}
+	 */
+	tee() {
+		if (this._bodyUsed) {
+			throw createError({
+				message: 'The body has already been consumed.',
+				code: 'BODY_ALREADY_USED',
+				status: 400,
+				exit_code: 111,
+				hint: 'Streams can only be read once. Use .tee() before reading.',
+			});
+		}
+		if (!this._request.body) {
+			throw createError({
+				message: 'The request has no body stream.',
+				code: 'BODY_STREAM_MISSING',
+				status: 400,
+				exit_code: 112,
+			});
+		}
+		const streams = this._request.body.tee();
+		this._bodyUsed = true;
+		this._parsedBody = null;
+		return streams;
 	}
 }
 

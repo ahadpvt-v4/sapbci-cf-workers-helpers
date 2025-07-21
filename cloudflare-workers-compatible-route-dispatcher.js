@@ -417,25 +417,11 @@ class RouteDispatcher {
 			return new Response(`Not found: ${method.toUpperCase()} ${pathname}`, { status: 404 });
 		}
 
-		const reqParser = new RequestParser(request);
 		const res = new ResponseBuilder(this, env);
 
 		let req;
 		try {
-			req = {
-				rawRequest: request,
-				method: request.method,
-				url,
-				segments: match.segments,
-				params: match.params,
-				queryString: reqParser.query(),
-				body: () => reqParser.body(),
-				parser: reqParser,
-				wildcards: (i) => {
-					if (!match.wildcards || !match.wildcards.length) return undefined;
-					return i === undefined ? match.wildcards : match.wildcards[i - 1];
-				},
-			};
+			req = new RequestParser(request, match);
 		} catch (err) {
 			throw createError({
 				message: 'Failed while initiating a Request: ' + err.message,
@@ -479,7 +465,6 @@ class RouteDispatcher {
 		return composed(req, res, env, ctx)
 			.then((result) => {
 				let finalResponse;
-
 				if (result instanceof Response) {
 					finalResponse = new Response(result.body, {
 						status: result.status,
@@ -487,10 +472,12 @@ class RouteDispatcher {
 				} else if (result instanceof ResponseBuilder) finalResponse = result.end();
 				else if (res._ended) finalResponse = res.rawResponse;
 				else if (result && result.constructor === Object) {
+					console.log(result);
 					return new Response(JSON.stringify(result), { status: 200 });
 				} else if (result instanceof Error) {
 					finalResponse = new Response(JSON.stringify(result), { status: 500 });
 				}
+
 				if (!finalResponse) {
 					return new Response(null, { status: 204 });
 				}
@@ -507,7 +494,7 @@ class RouteDispatcher {
 			.catch((err) => {
 				if (typeof this._errorHandler === 'function') {
 					try {
-						const handled = this._errorHandler(err, req, res, this.bindings, env, ctx);
+						const handled = this._errorHandler(err, req, res, env, ctx);
 						if (handled instanceof Promise) return handled;
 						if (handled instanceof Response) return handled;
 					} catch (handlerError) {

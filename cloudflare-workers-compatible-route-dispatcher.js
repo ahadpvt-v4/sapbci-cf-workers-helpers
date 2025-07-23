@@ -315,7 +315,26 @@ class RouteDispatcher {
 
 		return this;
 	}
-
+	mountWithHost(hostname, subrouter) {
+		if (!(subrouter instanceof RouteDispatcher)) {
+			throw createError({
+				message: 'Subrouter must be a RouteDispatcher instance.',
+				status: 400,
+				code: 'ERROR_INVALID_ARGUMENTS',
+				exit_code: 1,
+			});
+		}
+		for (const [method, routes] of subrouter.routes.entries()) {
+			const parentRoutes = this.routes.get(method) || [];
+			const updatedRoutes = routes.map((route) => {
+				const { path, handler, options, middlewares, method, findRequest } = route;
+				const newFindRequest = { ...findRequest, hostname };
+				return { path, handler, options, middlewares, method, findRequest: newFindRequest };
+			});
+			this.routes.set(method, parentRoutes.concat(updatedRoutes));
+		}
+		return this;
+	}
 	/**
 	 * Sets security headers to be applied to all responses.
 	 * @param {Object} headers - Key-value pairs of headers.
@@ -384,7 +403,37 @@ class RouteDispatcher {
 
 		return this;
 	}
+	groupHost(hostname, callback) {
+		if (typeof hostname !== 'string') {
+			throw createError({
+				message: 'groupHost() requires hostname to be a string.',
+				status: 400,
+				code: 'ERROR_INVALID_ARGUMENTS',
+				exit_code: 1,
+				hint: 'Example: .groupHost("api.example.com", fn)',
+			});
+		}
+		if (typeof callback !== 'function') {
+			throw createError({
+				message: 'Group callback must be a function.',
+				status: 400,
+				code: 'ERROR_INVALID_ARGUMENTS',
+				exit_code: 1,
+				hint: 'Pass a function that receives the group dispatcher.',
+			});
+		}
 
+		const self = this;
+		const grouped = {};
+		for (const key of ['get', 'post', 'delete', 'head', 'put', 'all']) {
+			grouped[key] = function (...args) {
+				const [path, predicate, maybeHandler, findRequest = {}] = args;
+				self[key](path, predicate, maybeHandler, { ...findRequest, hostname });
+			};
+		}
+		callback(grouped);
+		return this;
+	}
 	/**
 	 * Processes an incoming request, matches a route, and executes middleware and handler.
 	 * @param {Request} request - Incoming Fetch API Request.
@@ -412,7 +461,7 @@ class RouteDispatcher {
 			return res.end();
 		}
 
-		const match = this.matchRoute(method, pathname);
+		const match = this.matchRoute(method, pathname, request);
 		if (!match) {
 			return new Response(`Not found: ${method.toUpperCase()} ${pathname}`, { status: 404 });
 		}
@@ -555,7 +604,7 @@ class RouteDispatcher {
 	 * @returns {Object|null} Matched route info with handler, params, segments, wildcards or null if no match.
 	 * @throws Throws on invalid argument types.
 	 */
-	matchRoute(method, pathname) {
+	matchRoute(method, pathname, { headers: orignalHeaders }) {
 		if (typeof method !== 'string' || typeof pathname !== 'string') {
 			throw createError({
 				message: 'Invalid method/pathname arguments: both must be strings.',
@@ -568,19 +617,41 @@ class RouteDispatcher {
 
 		const candidates = this.routes.get(method) || [];
 		const pathSegments = pathname.split('/').filter(Boolean);
+		const reqHostname = orignalHeaders.get('host')?.toLowerCase();
+		let matchFailed = false;
+		for (const { path, handler, middlewares, findRequest } of candidates) {
+			let reqPropsMatached = true;
+			const { hostname } = findRequest;
 
-		for (const { path, handler, middlewares } of candidates) {
-			if (path === pathname || path === '*') {
-				return { handler, params: {}, segments: {}, wildcards: [], middlewares };
+			if (hostname && !(hostname === '*')) {
+				if (hostname.startsWith('*')) {
+					// support for *.domain.com
+					const suffix = hostname.slice(1); // remove '*'
+					if (!reqHostname.endsWith(suffix)) {
+						continue;
+					}
+				} else {
+					if (reqHostname !== hostname) {
+						continue;
+					}
+				}
 			}
-
+			for (const [key, value] of Object.entries(findRequest)) {
+				if (key !== 'hostname' && orignalHeaders.has(key)) {
+					if (value !== orignalHeaders.get(key)) {
+						reqPropsMatached = false;
+					}
+				}
+			}
+			if (!reqPropsMatached) {
+				continue;
+			}
 			const patternParts = path.split('/').filter(Boolean);
 
 			let params = {};
 			let segmentsMap = {};
 			let j = 0; // index in pathSegments
 			let i = 0; // index in patternParts
-			let matchFailed = false;
 
 			while (i < patternParts.length) {
 				const part = patternParts[i];
@@ -873,8 +944,9 @@ class RouteDispatcher {
 	 * @returns {RouteDispatcher} Self for chaining.
 	 * @throws {TypeError} Throws if path is invalid.
 	 */
-	get(path, predicate, maybeHandler) {
-		return this._registerRoute('get', path, predicate, maybeHandler);
+	get(path, predicate, maybeHandler, findRequest = {}) {
+		const method = 'get';
+		return this._registerRoute({ ...findRequest, method }, path, predicate, maybeHandler);
 	}
 	/**
 	 * Registers a POST route.
@@ -888,8 +960,9 @@ class RouteDispatcher {
 	 * @returns {RouteDispatcher} Self for chaining.
 	 * @throws {TypeError} Throws if path is invalid.
 	 */
-	post(path, predicate, maybeHandler) {
-		return this._registerRoute('post', path, predicate, maybeHandler);
+	post(path, predicate, maybeHandler, findRequest = {}) {
+		const method = 'post';
+		return this._registerRoute({ ...findRequest, method }, path, predicate, maybeHandler);
 	}
 	/**
 	 * Registers a PUT route.
@@ -904,8 +977,9 @@ class RouteDispatcher {
 	 * @throws {TypeError} Throws if path is invalid.
 	 */
 
-	put(path, predicate, maybeHandler) {
-		return this._registerRoute('put', path, predicate, maybeHandler);
+	put(path, predicate, maybeHandler, findRequest = {}) {
+		const method = 'put';
+		return this._registerRoute({ ...findRequest, method }, path, predicate, maybeHandler);
 	}
 	/**
 	 * Registers a DELETE route.
@@ -919,8 +993,9 @@ class RouteDispatcher {
 	 * @returns {RouteDispatcher} Self for chaining.
 	 * @throws {TypeError} Throws if path is invalid.
 	 */
-	delete(path, predicate, maybeHandler) {
-		return this._registerRoute('delete', path, predicate, maybeHandler);
+	delete(path, predicate, maybeHandler, findRequest = {}) {
+		const method = 'delete';
+		return this._registerRoute({ ...findRequest, method }, path, predicate, maybeHandler);
 	}
 	/**
 	 * Registers a HEAD route.
@@ -934,8 +1009,9 @@ class RouteDispatcher {
 	 * @returns {RouteDispatcher} Self for chaining.
 	 * @throws {TypeError} Throws if path is invalid.
 	 */
-	head(path, predicate, maybeHandler) {
-		return this._registerRoute('head', path, predicate, maybeHandler);
+	head(path, predicate, maybeHandler, findRequest = {}) {
+		const method = 'head';
+		return this._registerRoute({ ...findRequest, method }, path, predicate, maybeHandler);
 	}
 	/**
 	 * Registers a route for all HTTP methods.
@@ -949,10 +1025,10 @@ class RouteDispatcher {
 	 * @returns {RouteDispatcher} Self for chaining.
 	 * @throws {TypeError} Throws if path is invalid.
 	 */
-	all(path, predicate, maybeHandler) {
+	all(path, predicate, maybeHandler, findRequest = {}) {
 		const methods = ['get', 'post', 'put', 'patch', 'delete', 'options', 'head'];
 		for (const method of methods) {
-			this._registerRoute(method, path, predicate, maybeHandler);
+			this._registerRoute({ ...findRequest, method }, path, predicate, maybeHandler);
 		}
 		return this;
 	}
@@ -965,8 +1041,9 @@ class RouteDispatcher {
 	 * @returns {RouteDispatcher} Self for chaining.
 	 * @throws Throws if path is invalid.
 	 */
-	_registerRoute(method, path, predicate, maybeHandler) {
-		if (typeof path !== 'string' || !path.startsWith('/')) {
+	_registerRoute(findRequest, path, predicate, maybeHandler) {
+		let { method } = findRequest;
+		if (typeof path !== 'string' || (!path.startsWith('/') && path !== '*')) {
 			throw new TypeError(`Route path must be a string starting with "/". Received: ${path}`);
 		}
 		method = method.toLowerCase();
@@ -988,7 +1065,7 @@ class RouteDispatcher {
 			handler = predicate;
 		}
 
-		const route = { path, handler, middlewares, options, method };
+		const route = { path, handler, middlewares, options, method, findRequest };
 		this.routes.get(method).push(route);
 
 		return this;

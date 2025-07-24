@@ -521,7 +521,6 @@ class RouteDispatcher {
 				} else if (result instanceof ResponseBuilder) finalResponse = result.end();
 				else if (res._ended) finalResponse = res.rawResponse;
 				else if (result && result.constructor === Object) {
-					console.log(result);
 					return new Response(JSON.stringify(result), { status: 200 });
 				} else if (result instanceof Error) {
 					finalResponse = new Response(JSON.stringify(result), { status: 500 });
@@ -619,27 +618,30 @@ class RouteDispatcher {
 		const pathSegments = pathname.split('/').filter(Boolean);
 		const reqHostname = orignalHeaders.get('host')?.toLowerCase();
 		let matchFailed = false;
-		for (const { path, handler, middlewares, findRequest } of candidates) {
+		for (const { path, handler, middlewares, findRequest = {} } of candidates) {
 			let reqPropsMatached = true;
-			const { hostname } = findRequest;
+			if (findRequest) {
+				const { hostname } = findRequest;
 
-			if (hostname && !(hostname === '*')) {
-				if (hostname.startsWith('*')) {
-					// support for *.domain.com
-					const suffix = hostname.slice(1); // remove '*'
-					if (!reqHostname.endsWith(suffix)) {
-						continue;
-					}
-				} else {
-					if (reqHostname !== hostname) {
-						continue;
+				if (hostname && !(hostname === '*')) {
+					if (hostname.startsWith('*')) {
+						// support for *.domain.com
+						const suffix = hostname.slice(1); // remove '*'
+						if (!reqHostname.endsWith(suffix)) {
+							continue;
+						}
+					} else {
+						if (reqHostname !== hostname) {
+							continue;
+						}
 					}
 				}
-			}
-			for (const [key, value] of Object.entries(findRequest)) {
-				if (key !== 'hostname' && orignalHeaders.has(key)) {
-					if (value !== orignalHeaders.get(key)) {
-						reqPropsMatached = false;
+
+				for (const [key, value] of Object.entries(findRequest)) {
+					if (key !== 'hostname' && orignalHeaders.has(key)) {
+						if (value !== orignalHeaders.get(key)) {
+							reqPropsMatached = false;
+						}
 					}
 				}
 			}
@@ -697,6 +699,7 @@ class RouteDispatcher {
 						// Optionally: segmentsMap['*'] = remaining;
 						j = pathSegments.length;
 						i = patternParts.length;
+						matchFailed = false;
 						break;
 					}
 					const wildcardMatch = part.match(/^\*(\d+(?:-\d+)?|)(?::([a-zA-Z_][a-zA-Z0-9_]*)?)$/);
@@ -714,6 +717,7 @@ class RouteDispatcher {
 						if (wildcardName) {
 							segmentsMap[wildcardName] = remainingSegments;
 						}
+
 						// Since * with no count consumes all remaining segments, stop processing
 						j = pathSegments.length;
 						i = patternParts.length;
@@ -750,6 +754,7 @@ class RouteDispatcher {
 							j += count + submatch.jIncrement;
 							i = patternParts.length; // end loop
 							matched = true;
+
 							break;
 						}
 					}
@@ -910,6 +915,7 @@ class RouteDispatcher {
 				if (!fn) return;
 				return await fn(req, res, env, ctx, () => dispatch(i + 1));
 			}
+
 			return await dispatch(0);
 		};
 	}
@@ -926,9 +932,9 @@ class RouteDispatcher {
 	 * @returns {RouteDispatcher} Self for chaining.
 	 * @throws {TypeError} Throws if path is invalid.
 	 */
-	methods(methodNames, path, predicate, maybeHandler) {
+	methods(methodNames, path, predicate, maybeHandler, findRequest) {
 		for (const method of methodNames) {
-			this._registerRoute(method, path, predicate, maybeHandler);
+			this._registerRoute(method.toLowerCase(), path, predicate, maybeHandler, { ...findRequest, method });
 		}
 		return this;
 	}
@@ -946,7 +952,7 @@ class RouteDispatcher {
 	 */
 	get(path, predicate, maybeHandler, findRequest = {}) {
 		const method = 'get';
-		return this._registerRoute({ ...findRequest, method }, path, predicate, maybeHandler);
+		return this._registerRoute(method, path, predicate, maybeHandler, { ...findRequest, method });
 	}
 	/**
 	 * Registers a POST route.
@@ -962,7 +968,7 @@ class RouteDispatcher {
 	 */
 	post(path, predicate, maybeHandler, findRequest = {}) {
 		const method = 'post';
-		return this._registerRoute({ ...findRequest, method }, path, predicate, maybeHandler);
+		return this._registerRoute(method, path, predicate, maybeHandler, { ...findRequest, method });
 	}
 	/**
 	 * Registers a PUT route.
@@ -979,7 +985,7 @@ class RouteDispatcher {
 
 	put(path, predicate, maybeHandler, findRequest = {}) {
 		const method = 'put';
-		return this._registerRoute({ ...findRequest, method }, path, predicate, maybeHandler);
+		return this._registerRoute(method, path, predicate, maybeHandler, { ...findRequest, method });
 	}
 	/**
 	 * Registers a DELETE route.
@@ -995,7 +1001,7 @@ class RouteDispatcher {
 	 */
 	delete(path, predicate, maybeHandler, findRequest = {}) {
 		const method = 'delete';
-		return this._registerRoute({ ...findRequest, method }, path, predicate, maybeHandler);
+		return this._registerRoute(method, path, predicate, maybeHandler, { ...findRequest, method });
 	}
 	/**
 	 * Registers a HEAD route.
@@ -1011,7 +1017,7 @@ class RouteDispatcher {
 	 */
 	head(path, predicate, maybeHandler, findRequest = {}) {
 		const method = 'head';
-		return this._registerRoute({ ...findRequest, method }, path, predicate, maybeHandler);
+		return this._registerRoute(method, path, predicate, maybeHandler, { ...findRequest, method });
 	}
 	/**
 	 * Registers a route for all HTTP methods.
@@ -1028,7 +1034,7 @@ class RouteDispatcher {
 	all(path, predicate, maybeHandler, findRequest = {}) {
 		const methods = ['get', 'post', 'put', 'patch', 'delete', 'options', 'head'];
 		for (const method of methods) {
-			this._registerRoute({ ...findRequest, method }, path, predicate, maybeHandler);
+			this._registerRoute(method, path, predicate, maybeHandler, { ...findRequest, method });
 		}
 		return this;
 	}
@@ -1041,13 +1047,15 @@ class RouteDispatcher {
 	 * @returns {RouteDispatcher} Self for chaining.
 	 * @throws Throws if path is invalid.
 	 */
-	_registerRoute(findRequest, path, predicate, maybeHandler) {
-		let { method } = findRequest;
+	_registerRoute(method, path, predicate, maybeHandler, findRequest) {
 		if (typeof path !== 'string' || (!path.startsWith('/') && path !== '*')) {
 			throw new TypeError(`Route path must be a string starting with "/". Received: ${path}`);
 		}
+
 		method = method.toLowerCase();
-		if (!this.routes.has(method)) this.routes.set(method, []);
+		if (!this.routes.has(method)) {
+			this.routes.set(method, []);
+		}
 
 		let handler,
 			middlewares = [],

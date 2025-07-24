@@ -617,7 +617,7 @@ class RouteDispatcher {
 		const candidates = this.routes.get(method) || [];
 		const pathSegments = pathname.split('/').filter(Boolean);
 		const reqHostname = orignalHeaders.get('host')?.toLowerCase();
-		let matchFailed = false;
+
 		for (const { path, handler, middlewares, findRequest = {} } of candidates) {
 			let reqPropsMatached = true;
 			if (findRequest) {
@@ -654,7 +654,7 @@ class RouteDispatcher {
 			let segmentsMap = {};
 			let j = 0; // index in pathSegments
 			let i = 0; // index in patternParts
-
+			let matchFailed = false;
 			while (i < patternParts.length) {
 				const part = patternParts[i];
 
@@ -666,6 +666,7 @@ class RouteDispatcher {
 					}
 					i++;
 					j++;
+
 					continue;
 				}
 
@@ -816,6 +817,7 @@ class RouteDispatcher {
 				if (part === '*') {
 					const remaining = pathSegments.slice(j);
 					// Optionally: segmentsMap['*'] = remaining;
+					matchFailed = false;
 					j = pathSegments.length;
 					i = patternParts.length;
 					break;

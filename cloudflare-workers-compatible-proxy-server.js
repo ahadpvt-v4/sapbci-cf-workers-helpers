@@ -15,7 +15,7 @@ class ProxyServer {
 	/**
 	 * @param {string} targetBaseUrl - e.g., "https://api.example.com"
 	 */
-	constructor(targetBaseUrl, sliceStart, sliceStop) {
+	constructor({ targetBaseUrl, fullUrlMode = false, forwardUrl = null, hooks = [] }) {
 		if (!targetBaseUrl || typeof targetBaseUrl !== 'string') {
 			throw createError({
 				message: 'ProxyServer requires a targetBaseUrl string',
@@ -24,38 +24,34 @@ class ProxyServer {
 			});
 		}
 		this.target = targetBaseUrl.replace(/\/$/, '');
-		this.sliceStart = sliceStart;
-		this.sliceStop = sliceStop;
+		this.fullUrlMode = fullUrlMode || false;
+		this.forwardUrl = forwardUrl;
+		this.hooks = hooks || [];
+	}
+
+	useHook(fn) {
+		if (typeof fn === 'function') this.hooks.push(fn);
 	}
 
 	handler() {
 		return async (req, res, env, ctx, next) => {
-			console.log('~~~~');
 			try {
 				const incomingUrl = new URL(req.url);
-				let newPath = incomingUrl.pathname;
+				let forwardUrl;
 
-				// If sliceStart configured: remove everything before it
-				if (this.sliceStart) {
-					const startIndex = newPath.indexOf(`/${this.sliceStart}`);
-					if (startIndex !== -1) {
-						newPath = newPath.slice(startIndex + this.sliceStart.length + 1);
+				if (this.fullUrlMode) {
+					forwardUrl = this.target;
+				} else {
+					let newPath = incomingUrl.pathname;
+					forwardUrl = this.target + (newPath.startsWith('/') ? newPath : '/' + newPath) + incomingUrl.search;
+					if (typeof this.forwardUrl === 'function') {
+						forwardUrl = this.forwardUrl(this.target, newPath, incomingUrl);
 					}
 				}
 
-				// If sliceStop configured: remove everything after it
-				if (this.sliceStop) {
-					const endIndex = newPath.indexOf(`/${this.sliceStop}`);
-					if (endIndex !== -1) {
-						newPath = newPath.slice(0, endIndex);
-					}
-				}
-				console.log(newPath);
-				const forwardUrl = this.target + (newPath.startsWith('/') ? newPath : '/' + newPath) + incomingUrl.search;
+				let requestBody = ['GET', 'HEAD'].includes(req.rawRequest.method) ? undefined : req.rawRequest.body;
 
-				// Clone and clean headers for fetch
 				const outgoingHeaders = new Headers(req.rawRequest.headers);
-				// Remove hop-by-hop headers per RFC 2616 Sec 13.5.1
 				const hopByHopHeaders = [
 					'connection',
 					'keep-alive',
@@ -67,29 +63,43 @@ class ProxyServer {
 					'upgrade',
 					'host',
 				];
-				for (const h of hopByHopHeaders) outgoingHeaders.delete(h);
+				for (const h of hopByHopHeaders) {
+					outgoingHeaders.delete(h);
+				}
 
-				// Setup fetch options
 				const fetchInit = {
 					method: req.rawRequest.method,
 					headers: outgoingHeaders,
-					body: ['GET', 'HEAD'].includes(req.rawRequest.method) ? undefined : req.rawRequest.body,
-					redirect: 'manual', // don't auto-follow redirects
+					body: requestBody,
+					redirect: 'manual',
 				};
-
-				// Issue fetch request
+				for (const hook of this.hooks) {
+					const hookResult = await hook(req, res, env, ctx);
+					if (hookResult) {
+						const { method, headers, body, redirect } = hookResult;
+						if (method) {
+							fetchInit.method = method;
+						}
+						if (headers) {
+							for (const [k, v] of Object.entries(headers)) {
+								fetchInit.headers.set(k, v);
+							}
+						}
+						if (body) {
+							fetchInit.body = body;
+						}
+						if (redirect) {
+							fetchInit.redirect = redirect;
+						}
+					}
+				}
 				const proxiedResponse = await fetch(forwardUrl, fetchInit);
-
-				// Attach upstream raw response for possible later manual handling
 				req.upstreamResponse = proxiedResponse;
 
-				// If auto passthrough flag is set, respond immediately with upstream response
 				if (req.autoProxyPassthrough) {
-					// Filter hop-by-hop headers again for response
 					const responseHeaders = new Headers(proxiedResponse.headers);
 					for (const h of hopByHopHeaders) responseHeaders.delete(h);
 
-					// Return a streaming Response to client
 					return new Response(proxiedResponse.body, {
 						status: proxiedResponse.status,
 						statusText: proxiedResponse.statusText,
@@ -97,10 +107,8 @@ class ProxyServer {
 					});
 				}
 
-				// Otherwise, defer to next middleware or manual handling
 				return next();
 			} catch (err) {
-				// Use res interface to set status and send error text
 				return res.setStatus(500).sendText(`ProxyServer error: ${err.message}`);
 			}
 		};
@@ -108,5 +116,3 @@ class ProxyServer {
 }
 
 module.exports = { ProxyServer };
-
-//cloudflare-workers-compatible-proxy-server.js
